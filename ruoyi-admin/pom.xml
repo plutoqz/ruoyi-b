@@ -69,6 +69,13 @@
             <artifactId>ruoyi-demo</artifactId>
         </dependency>
 
+        <!-- https://mvnrepository.com/artifact/org.neo4j.driver/neo4j-java-driver -->
+        <dependency>
+            <groupId>org.neo4j.driver</groupId>
+            <artifactId>neo4j-java-driver</artifactId>
+            <version>5.23.0</version>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
