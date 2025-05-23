@@ -82,6 +82,13 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- CSV 解析 (OpenCSV) -->
+        <dependency>
+            <groupId>com.opencsv</groupId>
+            <artifactId>opencsv</artifactId>
+            <version>5.7.1</version>
+        </dependency>
+
         <!-- 添加thumbnailator依赖 -->
         <dependency>
             <groupId>net.coobird</groupId>
