@@ -1,5 +1,7 @@
 package org.ruoyi.controller;
 
+import org.neo4j.driver.Driver;
+import org.neo4j.driver.Value;
 import org.neo4j.driver.Result;
 import org.neo4j.driver.Session;
 import org.neo4j.driver.Transaction;
@@ -85,6 +87,95 @@ public class Neo4jController {
         return result;
     }
 
+    @PostMapping("/indicator") // 我们创建一个新的路径 /neo4j/indicator
+    public Map<String, Object> getIndicatorValue(@RequestBody Map<String, String> request) {
+        String villageName = request.get("villageName");
+        String indicatorName = request.get("indicatorName");
+        String timeTag = request.get("timeTag");
+
+        // --- 这是后端日志的关键，如果能看到这一行，说明请求已成功到达 ---
+        log.info("收到指标获取请求: villageName={}, indicatorName={}, timeTag={}", villageName, indicatorName, timeTag);
+
+        Map<String, Object> response = new HashMap<>();
+
+        // 参数校验
+        if (villageName == null || indicatorName == null || timeTag == null) {
+            response.put("error", "Missing required parameters in request body.");
+            return response;
+        }
+
+        String cypherQuery = "MATCH (i:指标) WHERE i.权属单位 = $villageName AND i.指标名称 = $indicatorName AND i.更新时间 = $timeTag RETURN i.指标值 as value";
+        // 根据指标名称选择不同的Cypher查询
+//        switch (indicatorName) {
+//            case "耕地总面积":
+//                cypherQuery = "MATCH (i:指标) " +
+//                        "WHERE i.权属单位 = $villageName " +
+//                        "  AND i.指标名称 = $indicatorName " +
+//                        "  AND i.更新时间 = $timeTag " +
+//                        "RETURN i.指标值 as value";
+//                break;
+//            case "耕地地块数量":
+//                cypherQuery = "MATCH (i:指标) " +
+//                        "WHERE i.权属单位 = $villageName " +
+//                        "  AND i.指标名称 = $indicatorName " +
+//                        "  AND i.更新时间 = $timeTag " +
+//                        "RETURN i.指标值 as value";
+//                break;
+//            // 在这里添加您需要的其他 case...
+//            case "非粮化面积":
+//                cypherQuery = "MATCH (i:指标) " +
+//                        "WHERE i.权属单位 = $villageName " +
+//                        "  AND i.指标名称 = $indicatorName " +
+//                        "  AND i.更新时间 = $timeTag " +
+//                        "RETURN i.指标值 as value";
+//                break;
+//            case "耕种面积":
+//                cypherQuery = "MATCH (p:地块 {ZLDWMC: $villageName}) " +
+//                        "WHERE p.更新时间 = $timeTag OR p.更新时间 IS NULL " +
+//                        "WITH sum(toFloat(coalesce(p.Shape_Area, p.TBMJ, 0))) as totalArea, " +
+//                        "     sum(CASE WHEN p.ZZSXMC = '未耕种' THEN toFloat(coalesce(p.Shape_Area, p.TBMJ, 0)) ELSE 0 END) as uncultivatedArea " +
+//                        "RETURN totalArea - uncultivatedArea as value";
+//                break;
+//            default:
+//                log.warn("不支持的指标名称: {}", indicatorName);
+//                response.put("value", 0.0);
+//                response.put("message", "Unsupported indicator name");
+//                return response;
+//        }
+
+        try (Session session = neo4jService.getDriver().session()) {
+            Map<String, Object> params = Map.of(
+                    "villageName", villageName,
+                    "indicatorName", indicatorName,
+                    "timeTag", timeTag
+            );
+
+            log.info("执行指标查询: [{}], 参数: {}", cypherQuery, params);
+
+            Result result = session.run(cypherQuery, params);
+            log.info("iii",result);
+            double value = 0.0;
+            if (result.hasNext()) {
+                Value resultValue = result.single().get("value");
+                if (!resultValue.isNull()) {
+                    value = resultValue.asDouble();
+                }
+            }
+
+            // 构造一个与前端期望的 DTO 类似的 Map 结构
+            response.put("villageName", villageName);
+            response.put("indicatorName", indicatorName);
+            response.put("timeTag", timeTag);
+            response.put("value", value);
+
+        } catch (Exception e) {
+            log.error("执行指标查询失败 [Indicator: {}]: {}", indicatorName, e.getMessage(), e);
+            response.put("error", "Failed to execute query.");
+            response.put("value", 0.0); // 出错时也返回一个安全的默认值
+        }
+
+        return response;
+    }
 
     // 一个简单的示例接口，用于测试 Neo4j 连接
     @GetMapping("/testConnection")
