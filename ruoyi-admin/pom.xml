@@ -16,6 +16,10 @@
         web服务入口
     </description>
 
+    <properties>
+        <geotools.version>27.2</geotools.version>
+    </properties>
+
     <dependencies>
 
         <!-- Mysql驱动包 -->
@@ -89,6 +93,12 @@
             <version>5.7.1</version>
         </dependency>
 
+        <dependency>
+            <groupId>net.lingala.zip4j</groupId>
+            <artifactId>zip4j</artifactId>
+            <version>2.11.5</version> <!-- 这是一个稳定且广泛使用的版本 -->
+        </dependency>
+
         <!-- 添加thumbnailator依赖 -->
         <dependency>
             <groupId>net.coobird</groupId>
@@ -102,7 +112,60 @@
             <scope>compile</scope>
         </dependency>
 
+        <!-- 2. 新增: 从第二个pom中添加的依赖 -->
+        <!-- spring-boot-starter-web 通常已经由ruoyi-system或父pom引入，但显式添加也无害 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- GeoTools for Shapefile parsing -->
+        <dependency>
+            <groupId>org.geotools</groupId>
+            <artifactId>gt-shapefile</artifactId>
+            <version>${geotools.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.geotools</groupId>
+            <artifactId>gt-main</artifactId>
+            <version>${geotools.version}</version>
+        </dependency>
+        <!-- Required for character set handling (e.g., GBK for Chinese) -->
+        <dependency>
+            <groupId>org.geotools</groupId>
+            <artifactId>gt-swing</artifactId>
+            <version>${geotools.version}</version>
+        </dependency>
+
     </dependencies>
+
+    <!-- 3. 新增/修改: 确保Maven中央仓库也被包含 -->
+    <repositories>
+        <!-- 添加这个仓库来解决 GeographicLib-Java 下载失败的问题 -->
+        <repository>
+            <id>central</id>
+            <name>Maven Central Repository</name>
+            <url>https://repo.maven.apache.org/maven2</url>
+            <layout>default</layout>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+        <!-- GeoTools 所在的仓库 -->
+        <repository>
+            <id>osgeo</id>
+            <name>OSGeo Release Repository</name>
+            <url>https://repo.osgeo.org/repository/release/</url>
+            <snapshots><enabled>false</enabled></snapshots>
+            <releases><enabled>true</enabled></releases>
+        </repository>
+        <repository>
+            <id>osgeo-snapshot</id>
+            <name>OSGeo Snapshot Repository</name>
+            <url>https://repo.osgeo.org/repository/snapshot/</url>
+            <snapshots><enabled>true</enabled></snapshots>
+            <releases><enabled>false</enabled></releases>
+        </repository>
+    </repositories>
 
     <build>
         <finalName>${project.artifactId}</finalName>
