@@ -2,65 +2,66 @@ package org.ruoyi.service.kgstructure;
 
 import org.ruoyi.controller.kgstructure.dto.*;
 import org.ruoyi.service.kgstructure.model.DataSource;
+import org.ruoyi.service.neo4j.Neo4jService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 public class KgGenerationService {
 
+    // [新增] 添加日志记录器
+    private static final Logger log = LoggerFactory.getLogger(KgGenerationService.class);
+
     @Autowired
     private DataSourceCacheService dataSourceCacheService;
 
+    @Autowired
+    private Neo4jService neo4jService;
+
     public GraphData generateKnowledgeGraph(KgGenerationRequest request) {
+
+        log.info("开始生成知识图谱...");
 
         // 1. 获取所有需要的数据源
         List<DataSource> dataSources = dataSourceCacheService.getAllDataSources(request.getDataSourceIds());
         if (dataSources.isEmpty()) {
             throw new IllegalStateException("未找到有效的数据源");
         }
+        log.info("已加载 {} 个数据源。", dataSources.size());
 
         // 2. 聚合所有数据源的 features 和 spatial relationships
-        // *** START: MODIFICATION - 全局唯一ID处理 ***
-        // 我们在聚合数据时，为每个 feature 和 relationship 的 ID 加上其数据源名称作为前缀。
         List<DataSource.Feature> allFeatures = new ArrayList<>();
         List<DataSource.SpatialRelationship> allSpatialRelationships = new ArrayList<>();
 
         for (DataSource ds : dataSources) {
-            String prefix = ds.getName() + "_"; // e.g., "buildings.zip_"
-
-            // 处理 Features
+            String prefix = ds.getName() + "_";
             ds.getFeatures().forEach(feature -> {
                 DataSource.Feature newFeature = new DataSource.Feature();
-                newFeature.setFeatureId(prefix + feature.getFeatureId()); // 添加前缀
+                newFeature.setFeatureId(prefix + feature.getFeatureId());
                 newFeature.setAttributes(feature.getAttributes());
                 allFeatures.add(newFeature);
             });
-
-            // 处理 SpatialRelationships
             if (ds.getSpatialRelationships() != null) {
                 ds.getSpatialRelationships().forEach(rel -> {
                     DataSource.SpatialRelationship newRel = new DataSource.SpatialRelationship();
-                    newRel.setSourceFeatureId(prefix + rel.getSourceFeatureId()); // 添加前缀
-                    newRel.setTargetFeatureId(prefix + rel.getTargetFeatureId()); // 添加前缀
+                    newRel.setSourceFeatureId(prefix + rel.getSourceFeatureId());
+                    newRel.setTargetFeatureId(prefix + rel.getTargetFeatureId());
                     newRel.setType(rel.getType());
                     allSpatialRelationships.add(newRel);
                 });
             }
         }
-        // *** END: MODIFICATION ***
+        log.info("聚合后总共有 {} 个要素和 {} 条空间关系。", allFeatures.size(), allSpatialRelationships.size());
 
-
-        // ==========================================================
-        //  VUE generateKG 逻辑的 Java 实现 (后续代码无需修改)
-        // ==========================================================
-
+        // --- 节点生成 ---
         Map<String, GraphNode> nodeMapById = new HashMap<>();
-
-        // --- 步骤 1: 节点生成 ---
         allFeatures.forEach(feature -> {
             Map<String, Object> item = feature.getAttributes();
             request.getNodeDefinitions().forEach(def -> {
@@ -111,9 +112,14 @@ public class KgGenerationService {
         });
 
         List<GraphNode> allNodes = new ArrayList<>(nodeMapById.values());
-        Set<String> uniqueEdgeKeys = new HashSet<>();
-        List<GraphEdge> allEdges = new ArrayList<>();
+        log.info("生成了 {} 个节点。", allNodes.size());
 
+        // --- 关系生成 ---
+        List<GraphEdge> allEdges = new ArrayList<>();
+        Set<String> uniqueEdgeKeys = new HashSet<>();
+
+        // ... (空间关系和字段连接关系生成逻辑保持不变) ...
+        // [此处省略了关系生成的详细代码，因为它们不变]
         // --- 步骤 2a: 处理空间关系 ---
         Map<String, List<GraphNode>> nodesByFeatureId = new HashMap<>();
         allNodes.forEach(node -> {
@@ -132,7 +138,7 @@ public class KgGenerationService {
 
         List<RelationshipDefinitionDto> spatialRules = request.getRelationshipDefinitions().stream()
                 .filter(r -> "spatial".equals(r.getMethod()))
-                .collect(Collectors.toList());
+                .toList();
 
         if(!spatialRules.isEmpty()){
             allSpatialRelationships.forEach(rel -> {
@@ -151,15 +157,15 @@ public class KgGenerationService {
         // --- 步骤 2b: 处理字段连接关系 ---
         List<RelationshipDefinitionDto> fieldRules = request.getRelationshipDefinitions().stream()
                 .filter(r -> "field".equals(r.getMethod()))
-                .collect(Collectors.toList());
+                .toList();
 
         fieldRules.forEach(rule -> {
             List<GraphNode> sourceNodes = allNodes.stream()
                     .filter(n -> rule.getSource().equals(n.getType()) || rule.getSource().equals(n.getGroup()))
-                    .collect(Collectors.toList());
+                    .toList();
             List<GraphNode> targetNodes = allNodes.stream()
                     .filter(n -> rule.getTarget().equals(n.getType()) || rule.getTarget().equals(n.getGroup()))
-                    .collect(Collectors.toList());
+                    .toList();
 
             if(sourceNodes.isEmpty() || targetNodes.isEmpty()) return;
 
@@ -185,7 +191,7 @@ public class KgGenerationService {
                             edge.setTarget(tNode.getId());
                             edge.setLabel(edgeLabel);
 
-                            String edgeKey = java.util.stream.Stream.of(sNode.getId(), tNode.getId()).sorted().collect(Collectors.joining("-")) + "-" + edgeLabel;
+                            String edgeKey = Stream.of(sNode.getId(), tNode.getId()).sorted().collect(Collectors.joining("-")) + "-" + edgeLabel;
                             if (uniqueEdgeKeys.add(edgeKey)) {
                                 allEdges.add(edge);
                             }
@@ -195,10 +201,31 @@ public class KgGenerationService {
             });
         });
 
-        // --- 步骤 3: 返回结果 ---
+        log.info("生成了 {} 条边。", allEdges.size());
+
+
+        // ==========================================================
+        // === [新增] 调用 Neo4jService 将图谱持久化 ===
+        // ==========================================================
+        try {
+            // === 清空数据库（可注释掉以取消该功能） ===
+            neo4jService.clearDatabase();
+
+            // 调用服务保存图谱数据
+            neo4jService.saveGraph(allNodes, allEdges);
+
+        } catch (Exception e) {
+            log.error("知识图谱持久化到 Neo4j 失败。", e);
+            // 向上抛出运行时异常，触发全局异常处理，向前端返回500错误
+            throw new RuntimeException("图谱计算完成，但存入数据库失败: " + e.getMessage(), e);
+        }
+
+        // --- 步骤 3: 返回结果给前端 ---
         GraphData finalGraph = new GraphData();
         finalGraph.setNodes(allNodes);
         finalGraph.setEdges(allEdges);
+
+        log.info("知识图谱生成和持久化全部完成。");
         return finalGraph;
     }
 
@@ -212,7 +239,7 @@ public class KgGenerationService {
             if (sourceNode.getId().equals(targetNode.getId())) return;
 
             String edgeLabel = labelMap.getOrDefault(rel.getType().toUpperCase(), rel.getType());
-            String edgeKey = java.util.stream.Stream.of(sourceNode.getId(), targetNode.getId()).sorted().collect(Collectors.joining("-")) + "-" + edgeLabel;
+            String edgeKey = Stream.of(sourceNode.getId(), targetNode.getId()).sorted().collect(Collectors.joining("-")) + "-" + edgeLabel;
 
             if (uniqueEdgeKeys.add(edgeKey)) {
                 GraphEdge edge = new GraphEdge();
