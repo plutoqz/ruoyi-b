@@ -13,7 +13,7 @@ public class CaptchaVo {
     /**
      * 是否开启验证码
      */
-    private Boolean captchaEnabled = true;
+    private Boolean captchaEnabled = false;
 
     private String uuid;
 

@@ -114,6 +114,12 @@
                 <scope>import</scope>
             </dependency>
 
+            <dependency>
+                <groupId>com.ruoyi</groupId>
+                <artifactId>ruoyi-framework</artifactId>
+                <version>${ruoyi.version}</version>
+            </dependency>
+
             <!-- common 的依赖配置-->
             <dependency>
                 <groupId>org.ruoyi</groupId>

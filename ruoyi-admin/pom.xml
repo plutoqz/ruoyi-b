@@ -53,8 +53,26 @@
 
         <dependency>
             <groupId>org.ruoyi</groupId>
-            <artifactId>ruoyi-system</artifactId>
+            <artifactId>ruoyi-common-core</artifactId>
         </dependency>
+
+        <dependency>
+            <groupId>org.ruoyi</groupId>
+            <artifactId>ruoyi-system</artifactId>
+            <version>${revision}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.ruoyi</groupId>
+            <artifactId>ruoyi-common</artifactId>
+            <version>${revision}</version>
+        </dependency>
+
+<!--        <dependency>-->
+<!--            <groupId>org.ruoyi</groupId>-->
+<!--            <artifactId>ruoyi-framework</artifactId>-->
+<!--            <version>${revision}</version>-->
+<!--        </dependency>-->
 
         <dependency>
             <groupId>org.ruoyi</groupId>
@@ -66,6 +84,10 @@
             <artifactId>ruoyi-knowledge</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
 
         <!--  demo模块  -->
         <dependency>

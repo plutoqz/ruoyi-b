@@ -218,14 +218,14 @@ mybatis-encryptor:
 swagger:
   info:
     # 标题
-    title: '标题：${ruoyi.name}多租户管理系统_接口文档'
+    title: '标题：${ruoyi.name}_接口文档'
     # 描述
-    description: '描述：用于管理集团旗下公司的人员信息,具体包括XXX,XXX模块...'
+    description: '描述：待修改'
     # 版本
     version: '版本号: ${ruoyi.version}'
     # 作者信息
     contact:
-      name: ageerle
+      name: pluto/ageerle
       email: ageerle@163.com
       url: https://gitee.com/ageerle/ruoyi-ai
   components:
@@ -253,6 +253,8 @@ springdoc:
       packages-to-scan: org.ruoyi.system
     - group: 4.代码生成模块
       packages-to-scan: org.ruoyi.generator
+    - group: 5.新增功能模块
+      packages-to-scan: org.ruoyi.controller
 
 # 防止XSS攻击
 xss:
@@ -321,3 +323,7 @@ wechat:
 
 
 
+# RAG 服务配置
+rag:
+  service:
+    url: http://localhost:8001/api/rag # 指向 Python 服务的根 API 路径
