@@ -1,4 +1,5 @@
 package org.ruoyi.service.RAG;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 public interface IRagService {
     /**
@@ -6,5 +7,6 @@ public interface IRagService {
      * @param question 用户的问题
      * @return RAG 服务返回的答案
      */
-    String queryRag(String question);
+//    String queryRag(String question);
+    SseEmitter streamQueryRag(String question);
 }
