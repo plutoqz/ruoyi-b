@@ -1,21 +1,31 @@
 package org.ruoyi.service.neo4j;
 
-import org.neo4j.driver.*;
+import org.neo4j.driver.Driver;
+import org.neo4j.driver.Session;
+import org.neo4j.driver.Transaction;
+import org.neo4j.driver.exceptions.Neo4jException;
+import org.neo4j.driver.exceptions.TransientException;
 import org.ruoyi.controller.kgstructure.dto.GraphEdge;
 import org.ruoyi.controller.kgstructure.dto.GraphNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
-import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.HashMap;
+import java.util.Objects;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * 封装所有与 Neo4j 数据库交互的服务.
- * 该服务同时支持原有的 Neo4jController 查询功能和新增的知识图谱构建功能。
+ * 封装所有与 Neo4j 数据库交互的服务 (生产就绪版)。
  */
 @Service
 public class Neo4jService {
@@ -23,10 +33,24 @@ public class Neo4jService {
     private static final Logger log = LoggerFactory.getLogger(Neo4jService.class);
     private final Driver driver;
 
-    /**
-     * 通过构造函数注入由 Neo4jConfig 创建的全局 Driver Bean。
-     * @param driver Spring 容器管理的 Neo4j Driver 实例。
-     */
+    @Value("${neo4j.batch-size:5000}")
+    private int batchSize;
+
+    // [修复] 修改正则表达式，重新允许中文字符 (Unicode 范围 \u4e00-\u9fa5) 并且允许点号
+    private static final Pattern VALID_REL_TYPE_PATTERN = Pattern.compile("^[A-Za-z0-9_\\u4e00-\\u9fa5\\.]+$");
+
+    public static final class GraphConstants {
+        public static final String UNIQUE_ID = "uniqueId";
+        public static final String ID = "id";
+        public static final String LABEL = "label";
+        public static final String NODE_TYPE = "type";
+        public static final String NODE_PROPERTIES = "properties";
+        public static final String EDGE_SOURCE_ID = "sourceId";
+        public static final String EDGE_TARGET_ID = "targetId";
+        public static final String EDGE_REL_TYPE = "relType";
+        public static final String EDGE_PROPS = "props";
+    }
+
     @Autowired
     public Neo4jService(Driver driver) {
         this.driver = driver;
@@ -34,23 +58,20 @@ public class Neo4jService {
     }
 
     /**
-     * [保留方法] 为 Neo4jController 提供 Driver 实例。
+     * [修复] 恢复 getDriver() 方法以兼容 Neo4jController。
      * @return 全局的 Neo4j Driver 实例。
      */
     public Driver getDriver() {
         return driver;
     }
 
-    // --- [新增] 为知识图谱构建添加的新方法 ---
-
     /**
-     * 清空整个 Neo4j 数据库。
-     * 这是一个危险操作，主要用于开发和测试阶段。
+     * [修复] 恢复 clearDatabase() 方法以兼容 KgGenerationService。
+     * 这是一个危险操作，会删除数据库中的所有节点和关系。
      */
     public void clearDatabase() {
         log.warn("正在清空整个 Neo4j 数据库...");
         try (Session session = driver.session()) {
-            // 使用 writeTransaction 确保操作的原子性
             session.writeTransaction(tx -> {
                 tx.run("MATCH (n) DETACH DELETE n");
                 return 1;
@@ -62,109 +83,200 @@ public class Neo4jService {
         }
     }
 
-    /**
-     * 将生成的图谱数据（节点和边）批量存入 Neo4j。
-     * @param nodes 节点列表 DTO
-     * @param edges 边列表 DTO
-     */
     public void saveGraph(List<GraphNode> nodes, List<GraphEdge> edges) {
-        if (nodes == null || nodes.isEmpty()) {
-            log.info("节点列表为空，无需存入 Neo4j。");
+        final List<GraphNode> finalNodes = nodes == null ? new ArrayList<>() : nodes;
+        final List<GraphEdge> finalEdges = edges == null ? new ArrayList<>() : edges;
+
+        validateGraphData(finalNodes, finalEdges);
+
+        if (finalNodes.isEmpty() && finalEdges.isEmpty()) {
+            log.info("节点和边列表均为空，无需存入 Neo4j。");
             return;
         }
 
-        try (Session session = driver.session()) {
-            // 在单个事务中执行所有写入操作，保证数据一致性
-            session.writeTransaction(tx -> {
-                // 1. 批量创建或更新节点
-                createOrUpdateNodesInTransaction(tx, nodes);
+        Set<String> nodeTypes = finalNodes.stream().map(GraphNode::getType).collect(Collectors.toSet());
+        ensureConstraintsForLabels(nodeTypes);
 
-                // 2. 批量创建或更新关系
-                if (edges != null && !edges.isEmpty()) {
-                    createOrUpdateEdgesInTransaction(tx, edges);
+        int maxRetries = 3;
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try (Session session = driver.session()) {
+                if (!finalNodes.isEmpty()) {
+                    importNodes(session, finalNodes);
                 }
-
-                return null; // writeTransaction 需要一个返回值
-            });
-            log.info("成功将 {} 个节点和 {} 条边同步到 Neo4j。", nodes.size(), (edges != null ? edges.size() : 0));
-        } catch (Exception e) {
-            log.error("保存图谱到 Neo4j 失败。", e);
-            throw new RuntimeException("保存图谱到 Neo4j 失败。", e);
+                if (!finalEdges.isEmpty()) {
+                    importEdges(session, finalNodes, finalEdges);
+                }
+                log.info("成功将 {} 个节点和 {} 条边同步到 Neo4j。", finalNodes.size(), finalEdges.size());
+                return;
+            } catch (TransientException e) {
+                log.warn("保存图谱时遇到可重试的瞬时异常 (尝试 {}/{})。错误: {}", attempt, maxRetries, e.getMessage());
+                if (attempt == maxRetries) {
+                    log.error("重试 {} 次后仍然失败，放弃操作。", maxRetries);
+                    throw new RuntimeException("保存图谱到 Neo4j 失败，已达到最大重试次数。", e);
+                }
+                try {
+                    Thread.sleep(1000 * attempt);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("重试等待时被中断。", ie);
+                }
+            } catch (Exception e) {
+                log.error("保存图谱到 Neo4j 失败。", e);
+                throw new RuntimeException("保存图谱到 Neo4j 失败。", e);
+            }
         }
     }
 
-    /**
-     * 在一个事务中批量创建或更新节点。
-     * 使用 MERGE 可以避免重复创建具有相同 uniqueId 的节点。
-     */
+    private void importNodes(Session session, List<GraphNode> nodes) {
+        log.info("开始分批导入 {} 个节点...", nodes.size());
+        for (int i = 0; i < nodes.size(); i += batchSize) {
+            int end = Math.min(i + batchSize, nodes.size());
+            List<GraphNode> batch = nodes.subList(i, end);
+            session.writeTransaction(tx -> {
+                createOrUpdateNodesInTransaction(tx, batch);
+                return null;
+            });
+            log.debug("已处理 {}/{} 个节点。", end, nodes.size());
+        }
+        log.info("所有节点导入完成。");
+    }
+
+    private void importEdges(Session session, List<GraphNode> nodes, List<GraphEdge> edges) {
+        log.info("开始预处理和分组 {} 条边以优化导入性能...", edges.size());
+        Map<String, String> nodeIdToTypeMap = nodes.stream()
+                .collect(Collectors.toMap(GraphNode::getId, GraphNode::getType, (t1, t2) -> t1));
+
+        Map<List<String>, List<GraphEdge>> groupedEdges = edges.stream()
+                .collect(Collectors.groupingBy(edge -> {
+                    String sourceType = nodeIdToTypeMap.get(edge.getSource());
+                    String targetType = nodeIdToTypeMap.get(edge.getTarget());
+                    if (sourceType == null) {
+                        throw new IllegalArgumentException("数据不一致：边的源节点 ID '" + edge.getSource() + "' 在提供的节点列表中不存在。");
+                    }
+                    if (targetType == null) {
+                        throw new IllegalArgumentException("数据不一致：边的目标节点 ID '" + edge.getTarget() + "' 在提供的节点列表中不存在。");
+                    }
+                    return List.of(sourceType, edge.getLabel(), targetType);
+                }));
+        log.info("边被分成了 {} 个不同的组进行处理。", groupedEdges.size());
+
+        for (Map.Entry<List<String>, List<GraphEdge>> entry : groupedEdges.entrySet()) {
+            List<String> groupKey = entry.getKey();
+            List<GraphEdge> edgeGroup = entry.getValue();
+            String sourceType = groupKey.get(0);
+            String relType = groupKey.get(1);
+            String targetType = groupKey.get(2);
+
+            log.info("开始分批导入组 (:{})-[:{}]->(:{})，共 {} 条边...", sourceType, relType, targetType, edgeGroup.size());
+            for (int i = 0; i < edgeGroup.size(); i += batchSize) {
+                int end = Math.min(i + batchSize, edgeGroup.size());
+                List<GraphEdge> batch = edgeGroup.subList(i, end);
+                session.writeTransaction(tx -> {
+                    createOrUpdateEdgesInTransaction(tx, batch, sourceType, targetType);
+                    return null;
+                });
+                log.debug("组 (:{})-[:{}]->(:{}) 已处理 {}/{} 条边。", sourceType, relType, targetType, end, edgeGroup.size());
+            }
+        }
+        log.info("所有边导入完成。");
+    }
+
+    private void ensureConstraintsForLabels(Set<String> labels) {
+        if (CollectionUtils.isEmpty(labels)) return;
+        log.info("正在为以下 Labels 确保唯一性约束: {}", labels);
+        try (Session session = driver.session()) {
+            for (String label : labels) {
+                String constraintQuery = String.format(
+                        "CREATE CONSTRAINT IF NOT EXISTS FOR (n:%s) REQUIRE n.%s IS UNIQUE", label, GraphConstants.UNIQUE_ID
+                );
+                try {
+                    session.run(constraintQuery);
+                } catch (Neo4jException e) {
+                    if (e.code().contains("Schema.EquivalentSchemaRuleAlreadyExists")) {
+                        log.warn("尝试创建约束时发生并发冲突，但约束已存在，忽略此错误。Label: {}", label);
+                    } else {
+                        throw e;
+                    }
+                }
+            }
+            log.info("所有 Label 的约束已确保存在。");
+        } catch (Exception e) {
+            log.error("在 Neo4j 中创建按 Label 的约束时失败。性能可能受影响。", e);
+        }
+    }
+
+    private void validateGraphData(List<GraphNode> nodes, List<GraphEdge> edges) {
+        nodes.forEach(node -> {
+            if (!StringUtils.hasText(node.getId())) throw new IllegalArgumentException("发现节点的 ID 为空或 null，节点数据: " + node.getProperties());
+            if (!StringUtils.hasText(node.getType())) throw new IllegalArgumentException("发现节点的类型(Type/Label)为空或 null，节点 ID: " + node.getId());
+        });
+        edges.forEach(edge -> {
+            if (!StringUtils.hasText(edge.getSource()) || !StringUtils.hasText(edge.getTarget())) throw new IllegalArgumentException("发现边的源节点或目标节点 ID 为空，边 ID: " + edge.getId());
+            if (!StringUtils.hasText(edge.getLabel())) throw new IllegalArgumentException("发现边的标签(Label/Type)为空，边 ID: " + edge.getId());
+
+            if (!VALID_REL_TYPE_PATTERN.matcher(edge.getLabel()).matches()) {
+                // [修复] 更新错误信息，使其更准确
+                throw new IllegalArgumentException(String.format(
+                        "关系类型 '%s' 包含非法字符。只允许中英文字母、数字和下划线。边 ID: %s", edge.getLabel(), edge.getId()
+                ));
+            }
+        });
+    }
+
     private void createOrUpdateNodesInTransaction(Transaction tx, List<GraphNode> nodes) {
         List<Map<String, Object>> nodeProperties = nodes.stream()
-                .map(node -> Map.of(
-                        "uniqueId", node.getId(),
-                        "label", node.getLabel(),
-                        "type", node.getType(),
-                        "properties", node.getProperties()
-                ))
-                .collect(Collectors.toList());
+                .map(node -> {
+                    Map<String, Object> props = new HashMap<>(node.getProperties());
+                    props.remove(GraphConstants.UNIQUE_ID);
+                    props.remove(GraphConstants.ID);
+                    props.remove(GraphConstants.LABEL);
 
-        // 使用 MERGE 保证节点的幂等性（如果节点已存在则更新，不存在则创建）
-        // 使用 apoc.create.setLabels 动态设置或替换标签
+                    return Map.of(
+                            GraphConstants.UNIQUE_ID, node.getId(),
+                            GraphConstants.LABEL, node.getLabel(),
+                            GraphConstants.NODE_TYPE, node.getType(),
+                            GraphConstants.NODE_PROPERTIES, props
+                    );
+                }).collect(Collectors.toList());
+
         String query = "UNWIND $nodes AS node_data " +
-                "MERGE (n {uniqueId: node_data.uniqueId}) " +
-                "SET n.label = node_data.label " +
-                "SET n += node_data.properties " +
+                "MERGE (n {" + GraphConstants.UNIQUE_ID + ": node_data." + GraphConstants.UNIQUE_ID + "}) " +
+                "SET n += node_data." + GraphConstants.NODE_PROPERTIES + ", " +
+                "    n." + GraphConstants.LABEL + " = node_data." + GraphConstants.LABEL + " " +
                 "WITH n, node_data " +
-                "CALL apoc.create.setLabels(n, [node_data.type]) YIELD node " +
+                "CALL apoc.create.addLabels(n, [node_data." + GraphConstants.NODE_TYPE + "]) YIELD node " +
                 "RETURN count(node)";
-
-        Result result = tx.run(query, Map.of("nodes", nodeProperties));
-        log.info("在 Neo4j 中创建或更新了 {} 个节点。", result.single().get(0).asLong());
+        tx.run(query, Map.of("nodes", nodeProperties));
     }
 
-    /**
-     * 在一个事务中批量创建或更新关系。
-     * 使用 MERGE 避免重复创建相同的关系。
-     */
+    private void createOrUpdateEdgesInTransaction(Transaction tx, List<GraphEdge> edges, String sourceType, String targetType) {
+        if (CollectionUtils.isEmpty(edges)) return;
 
-    private void createOrUpdateEdgesInTransaction(Transaction tx, List<GraphEdge> edges) {
-        if (edges == null || edges.isEmpty()) {
-            log.info("边列表为空，跳过关系创建。");
-            return;
-        }
-
-        // 1. 把 DTO 转成 Cypher 参数，直接把中文 label 当作关系类型
         List<Map<String, Object>> edgeDataList = edges.stream()
                 .map(edge -> {
                     Map<String, Object> props = new HashMap<>();
-                    props.put("id", edge.getId());
-                    props.put("label", edge.getLabel()); // 原始中文标签
-
+                    props.put(GraphConstants.ID, edge.getId());
+                    props.put(GraphConstants.LABEL, edge.getLabel());
                     return Map.of(
-                            "sourceId", edge.getSource(),
-                            "targetId", edge.getTarget(),
-                            "relType", edge.getLabel(),
-                            "props", props
+                            GraphConstants.EDGE_SOURCE_ID, edge.getSource(),
+                            GraphConstants.EDGE_TARGET_ID, edge.getTarget(),
+                            GraphConstants.EDGE_REL_TYPE, edge.getLabel(),
+                            GraphConstants.EDGE_PROPS, props
                     );
-                })
-                .toList();
+                }).toList();
 
-        // 2. 用 apoc.merge.relationship 动态创建／更新中文类型的关系
-        String cypher =
+        String cypher = String.format(
                 "UNWIND $edges AS e\n" +
-                        "MATCH (s {uniqueId: e.sourceId}), (t {uniqueId: e.targetId})\n" +
-                        "CALL apoc.merge.relationship(\n" +
-                        "  s,                  // 1. 起点节点 (startNode)\n" +
-                        "  e.relType,          // 2. 关系类型 (relationshipType)\n" +
-                        "  {id: e.props.id},   // 3. 识别属性 (identProps)\n" +
-                        "  e.props,            // 4. 创建时属性 (onCreateProps)\n" +
-                        "  t,                  // 5. 终点节点 (endNode) - [修正点] t 节点移到这里\n" +
-                        "  e.props             // 6. 匹配时属性 (onMatchProps) - [修正点] 更新属性移到最后\n" +
-                        ") YIELD rel\n" +
-                        "RETURN count(rel) AS cnt";
+                        "MATCH (s:%s {%s: e.%s})\n" +
+                        "MATCH (t:%s {%s: e.%s})\n" +
+                        "CALL apoc.merge.relationship(s, e.%s, {%s: e.%s.%s}, e.%s, t, e.%s) YIELD rel\n" +
+                        "RETURN count(rel) AS cnt",
+                sourceType, GraphConstants.UNIQUE_ID, GraphConstants.EDGE_SOURCE_ID,
+                targetType, GraphConstants.UNIQUE_ID, GraphConstants.EDGE_TARGET_ID,
+                GraphConstants.EDGE_REL_TYPE, GraphConstants.ID, GraphConstants.EDGE_PROPS, GraphConstants.ID,
+                GraphConstants.EDGE_PROPS, GraphConstants.EDGE_PROPS
+        );
 
-        Result result = tx.run(cypher, Map.of("edges", edgeDataList));
-        long cnt = result.single().get("cnt").asLong();
-        log.info("在 Neo4j 中创建或更新了 {} 条关系（直接使用中文类型）。", cnt);
+        tx.run(cypher, Map.of("edges", edgeDataList));
     }
-
 }

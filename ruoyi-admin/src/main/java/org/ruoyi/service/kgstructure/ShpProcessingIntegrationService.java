@@ -1,6 +1,7 @@
 package org.ruoyi.service.kgstructure;
 
 import org.ruoyi.controller.shp.FileParsingService;
+import org.ruoyi.controller.shp.SseService;
 import org.ruoyi.controller.shp.StorageService;
 import org.ruoyi.controller.shp.dto.FeatureData;
 import org.ruoyi.controller.shp.dto.ShpParseResult;
@@ -16,7 +17,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Service
@@ -32,7 +35,62 @@ public class ShpProcessingIntegrationService {
 
     @Autowired
     private DataSourceCacheService dataSourceCacheService;
+    private final SseService sseService;
 
+    // 【新增】用于暂存文件的 Map
+    private final Map<String, File> stagedFiles = new ConcurrentHashMap<>();
+
+    // 【修改】更新构造函数以注入 SseService
+    @Autowired
+    public ShpProcessingIntegrationService(FileParsingService fileParsingService, StorageService storageService,
+                                           DataSourceCacheService dataSourceCacheService, SseService sseService) {
+        this.fileParsingService = fileParsingService;
+        this.storageService = storageService;
+        this.dataSourceCacheService = dataSourceCacheService;
+        this.sseService = sseService;
+    }
+
+    /**
+     * 【新增】第 1 步：暂存文件。由 /upload 接口调用。
+     * 接收上传的文件，保存到临时位置，并返回一个任务ID。
+     *
+     * @param file 前端上传的文件
+     * @return 任务ID
+     * @throws IOException 文件处理异常
+     */
+    public String stageFileForProcessing(MultipartFile file) throws IOException {
+        String taskId = UUID.randomUUID().toString();
+        File tempFile = saveMultipartFileToTemp(file, taskId);
+
+        // 将文件暂存起来，等待 SSE 连接建立后再处理
+        stagedFiles.put(taskId, tempFile);
+        log.info("文件 {} 已被暂存，路径: {}，任务ID: {}", file.getOriginalFilename(), tempFile.getAbsolutePath(), taskId);
+
+        // 可以在这里设置一个定时清理任务，防止文件无限期暂存
+
+        return taskId;
+    }
+
+    /**
+     * 【新增】第 2 步：启动解析。由 /subscribe 接口调用。
+     * 查找暂存的文件，并启动异步解析任务。
+     *
+     * @param taskId 任务ID
+     */
+    public void startParsingForStagedFile(String taskId) {
+        File fileToParse = stagedFiles.remove(taskId); // 取出并移除
+        if (fileToParse != null) {
+            log.info("SSE 连接已建立，为任务 {} 启动异步解析。", taskId);
+            // 启动异步解析，这个方法会立即返回
+            fileParsingService.parseShapefile(taskId, fileToParse);
+        } else {
+            log.warn("无法为任务 {} 找到暂存的文件来启动解析，可能已被处理或已过期。", taskId);
+            // 通过 SSE 发送一个错误通知，告知前端任务失败
+            Map<String, Object> sseData = Map.of("status", "FAILED", "error", "Task file not found or expired.");
+            sseService.send(taskId, sseData);
+            sseService.complete(taskId);
+        }
+    }
     /**
      * 主入口方法：接收上传的文件，启动异步解析，并返回一个任务ID。
      * @param file 前端上传的文件

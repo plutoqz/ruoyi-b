@@ -5,6 +5,7 @@ import org.ruoyi.controller.RAG.dto.RagQueryResponse;
 import org.ruoyi.service.RAG.IRagService ;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -14,6 +15,8 @@ import reactor.core.publisher.Mono;
 import org.springframework.http.MediaType;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Flux;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.RestTemplate;
 
 @Service
 public class RagServiceImpl implements IRagService {
@@ -74,5 +77,24 @@ public class RagServiceImpl implements IRagService {
 
         // 返回 emitter 给 Controller，Spring MVC 会负责后续的流处理
         return emitter;
+    }
+
+    // 注入 RestTemplate 用于同步 GET 请求
+    @Autowired
+    private RestTemplate restTemplate;
+
+    @Override
+    public Object getDocuments() {
+        String url = ragServiceUrl + "/documents";
+        log.info("正在代理请求知识库文档: {}", url);
+        // 直接获取 body，让 Spring 去推断类型
+        return restTemplate.getForObject(url, Object.class);
+    }
+
+    @Override
+    public Object getGraphData() {
+        String url = ragServiceUrl + "/graph";
+        log.info("正在代理请求知识图谱数据: {}", url);
+        return restTemplate.getForObject(url, Object.class);
     }
 }

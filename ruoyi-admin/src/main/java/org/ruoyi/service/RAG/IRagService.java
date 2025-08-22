@@ -1,5 +1,6 @@
 package org.ruoyi.service.RAG;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.http.ResponseEntity;
 
 public interface IRagService {
     /**
@@ -9,4 +10,10 @@ public interface IRagService {
      */
 //    String queryRag(String question);
     SseEmitter streamQueryRag(String question);
+
+//    ResponseEntity<String> getDocuments();
+//
+//    ResponseEntity<String> getGraphData();
+    Object getDocuments();
+    Object getGraphData();
 }

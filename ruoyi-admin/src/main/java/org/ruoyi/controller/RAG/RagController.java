@@ -1,6 +1,7 @@
 package org.ruoyi.controller.RAG;
 
 import cn.dev33.satoken.stp.StpUtil;
+import org.ruoyi.common.core.domain.R;
 import org.ruoyi.service.RAG.IRagService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
@@ -10,6 +11,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.RestTemplate;
 @RestController
 @RequestMapping("/system/rag")
 public class RagController {
@@ -46,5 +49,19 @@ public class RagController {
 
         // 3. 调用 Service 层，开始真正的流式处理
         return ragService.streamQueryRag(question);
+    }
+
+    // 返回类型改为 R<?>，data 字段可以是任何类型
+    @GetMapping("/documents")
+    public R<?> getDocuments() {
+        StpUtil.checkLogin();
+        // 直接将 Service 返回的 Object 放入 R.ok 的 data 中
+        return R.ok(ragService.getDocuments());
+    }
+
+    @GetMapping("/graph")
+    public R<?> getGraphData() {
+        StpUtil.checkLogin();
+        return R.ok(ragService.getGraphData());
     }
 }
