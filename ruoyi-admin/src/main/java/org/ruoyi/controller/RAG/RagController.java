@@ -1,18 +1,22 @@
 package org.ruoyi.controller.RAG;
 
 import cn.dev33.satoken.stp.StpUtil;
+import lombok.extern.slf4j.Slf4j;
 import org.ruoyi.common.core.domain.R;
 import org.ruoyi.service.RAG.IRagService;
+import org.ruoyi.service.RAG.RAGGenerationService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestTemplate;
+
+import java.util.concurrent.CompletableFuture;
+
+@Slf4j
 @RestController
 @RequestMapping("/system/rag")
 public class RagController {
@@ -63,5 +67,60 @@ public class RagController {
     public R<?> getGraphData() {
         StpUtil.checkLogin();
         return R.ok(ragService.getGraphData());
+    }
+
+    @PostMapping("/build/start")
+    public R<?> startBuild(@RequestParam("files") MultipartFile[] files) {
+        StpUtil.checkLogin();
+        if (files == null || files.length == 0) {
+            return R.fail("上传的文件不能为空");
+        }
+        String taskId = ragService.startBuild(files);
+        // 立即开始在后台监控这个任务的进度
+        ragService.monitorBuildProgress(taskId);
+        return R.ok("构建任务已创建", taskId);
+    }
+
+//    @PostMapping("/build/commit/{taskId}") // 1. 将 taskId 作为路径的一部分
+//    public R<?> commitBuild(@PathVariable String taskId) { // 2. 使用 @PathVariable
+//        StpUtil.checkLogin();
+//        return R.ok(ragService.commitBuild(taskId));
+//    }
+
+    @PostMapping("/build/abort/{taskId}") // 1. 将 taskId 作为路径的一部分
+    public R<?> abortBuild(@PathVariable String taskId) { // 2. 使用 @PathVariable
+        StpUtil.checkLogin();
+        return R.ok(ragService.abortBuild(taskId));
+    }
+
+    @GetMapping("/build/status/{taskId}")
+    public R<?> getBuildStatus(@PathVariable String taskId) {
+        StpUtil.checkLogin();
+        return R.ok(ragService.getBuildStatus(taskId));
+    }
+
+    @GetMapping("/build/preview/{taskId}")
+    public R<?> getBuildPreviewGraph(@PathVariable String taskId) {
+        StpUtil.checkLogin();
+        return R.ok(ragService.getBuildPreviewGraph(taskId));
+    }
+
+    @Autowired
+    private RAGGenerationService RAGGenerationService;
+
+    @PostMapping("/build/commit/{taskId}")
+    public R<?> commitBuild(@PathVariable String taskId) {
+        StpUtil.checkLogin();
+        log.info("开始导入");
+        RAGGenerationService.generateAndSaveGraph(taskId);
+        log.info("结束导入");
+//        CompletableFuture.runAsync(() -> {
+//            // 1. 异步地触发导入 Neo4j 的任务
+//
+//            // 2. 再触发 Python 端的 commit (重命名文件夹)
+//            ragService.notifyPythonToCommit(taskId);
+//        });
+        ragService.notifyPythonToCommit(taskId);
+        return R.ok("知识库已应用，并已开始同步到图数据库。");
     }
 }

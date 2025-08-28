@@ -5,6 +5,7 @@ import org.neo4j.driver.Session;
 import org.neo4j.driver.Transaction;
 import org.neo4j.driver.exceptions.Neo4jException;
 import org.neo4j.driver.exceptions.TransientException;
+import org.ruoyi.controller.kgstructure.dto.GraphData;
 import org.ruoyi.controller.kgstructure.dto.GraphEdge;
 import org.ruoyi.controller.kgstructure.dto.GraphNode;
 import org.slf4j.Logger;
@@ -23,6 +24,10 @@ import java.util.HashMap;
 import java.util.Objects;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+
+import org.neo4j.driver.Record;
+import org.neo4j.driver.types.Node;
+import org.neo4j.driver.types.Relationship;
 
 /**
  * 封装所有与 Neo4j 数据库交互的服务 (生产就绪版)。
@@ -278,5 +283,72 @@ public class Neo4jService {
         );
 
         tx.run(cypher, Map.of("edges", edgeDataList));
+    }
+
+
+    /**
+     * 查询全图数据
+     * RAG
+     * @param limit 限制返回的节点和关系数量，防止前端过载
+     */
+    public GraphData getFullGraph(int limit) {
+        String query = String.format(
+                "MATCH (n) WITH n LIMIT %d " +
+                        "OPTIONAL MATCH (n)-[r]-(m) " +
+                        "RETURN n, r, m", limit
+        );
+
+        try (Session session = driver.session()) {
+            return session.readTransaction(tx -> {
+                List<Record> records = tx.run(query).list();
+                return convertRecordsToGraphData(records);
+            });
+        }
+    }
+
+    // [辅助方法] 将 Neo4j 的查询结果转换为我们的 DTO
+    private GraphData convertRecordsToGraphData(List<Record> records) {
+        Map<Long, GraphNode> nodes = new HashMap<>();
+        List<GraphEdge> edges = new ArrayList<>();
+
+        for (Record record : records) {
+            // 处理节点 n
+            Node n = record.get("n").asNode();
+            if (!nodes.containsKey(n.id())) {
+                nodes.put(n.id(), convertNodeToGraphNode(n));
+            }
+            // 处理节点 m
+            Node m = record.get("m").asNode();
+            if (m != null && !nodes.containsKey(m.id())) {
+                nodes.put(m.id(), convertNodeToGraphNode(m));
+            }
+            // 处理关系 r
+            Relationship r = record.get("r").asRelationship();
+            if (r != null) {
+                edges.add(convertRelationshipToGraphEdge(r));
+            }
+        }
+        return new GraphData(new ArrayList<>(nodes.values()), edges);
+    }
+
+    private GraphNode convertNodeToGraphNode(Node node) {
+        GraphNode graphNode = new GraphNode();
+        // Neo4j 内部 ID 是 long，我们转为 String
+        graphNode.setId(String.valueOf(node.id()));
+        graphNode.setLabel(node.get("label").asString(""));
+        // 第一个标签作为类型
+        graphNode.setType(node.labels().iterator().next());
+        graphNode.setProperties(node.asMap());
+        return graphNode;
+    }
+
+    private GraphEdge convertRelationshipToGraphEdge(Relationship rel) {
+        GraphEdge graphEdge = new GraphEdge();
+        graphEdge.setId(String.valueOf(rel.id()));
+        graphEdge.setSource(String.valueOf(rel.startNodeId()));
+        graphEdge.setTarget(String.valueOf(rel.endNodeId()));
+        graphEdge.setLabel(rel.type()); // 关系类型就是它的 label
+        graphEdge.setProperties(rel.asMap());
+        return graphEdge;
     }
 }
