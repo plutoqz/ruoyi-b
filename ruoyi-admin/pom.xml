@@ -62,11 +62,11 @@
             <version>${revision}</version>
         </dependency>
 
-        <dependency>
-            <groupId>org.ruoyi</groupId>
-            <artifactId>ruoyi-common</artifactId>
-            <version>${revision}</version>
-        </dependency>
+<!--        <dependency>-->
+<!--            <groupId>org.ruoyi</groupId>-->
+<!--            <artifactId>ruoyi-common</artifactId>-->
+<!--            <version>${revision}</version>-->
+<!--        </dependency>-->
 
 <!--        <dependency>-->
 <!--            <groupId>org.ruoyi</groupId>-->
@@ -167,33 +167,33 @@
     </dependencies>
 
     <!-- 3. 新增/修改: 确保Maven中央仓库也被包含 -->
-    <repositories>
-        <!-- 添加这个仓库来解决 GeographicLib-Java 下载失败的问题 -->
-        <repository>
-            <id>central</id>
-            <name>Maven Central Repository</name>
-            <url>https://repo.maven.apache.org/maven2</url>
-            <layout>default</layout>
-            <snapshots>
-                <enabled>false</enabled>
-            </snapshots>
-        </repository>
-        <!-- GeoTools 所在的仓库 -->
-        <repository>
-            <id>osgeo</id>
-            <name>OSGeo Release Repository</name>
-            <url>https://repo.osgeo.org/repository/release/</url>
-            <snapshots><enabled>false</enabled></snapshots>
-            <releases><enabled>true</enabled></releases>
-        </repository>
-        <repository>
-            <id>osgeo-snapshot</id>
-            <name>OSGeo Snapshot Repository</name>
-            <url>https://repo.osgeo.org/repository/snapshot/</url>
-            <snapshots><enabled>true</enabled></snapshots>
-            <releases><enabled>false</enabled></releases>
-        </repository>
-    </repositories>
+<!--    <repositories>-->
+<!--        &lt;!&ndash; 添加这个仓库来解决 GeographicLib-Java 下载失败的问题 &ndash;&gt;-->
+<!--        <repository>-->
+<!--            <id>central</id>-->
+<!--            <name>Maven Central Repository</name>-->
+<!--            <url>https://repo.maven.apache.org/maven2</url>-->
+<!--            <layout>default</layout>-->
+<!--            <snapshots>-->
+<!--                <enabled>false</enabled>-->
+<!--            </snapshots>-->
+<!--        </repository>-->
+<!--        &lt;!&ndash; GeoTools 所在的仓库 &ndash;&gt;-->
+<!--        <repository>-->
+<!--            <id>osgeo</id>-->
+<!--            <name>OSGeo Release Repository</name>-->
+<!--            <url>https://repo.osgeo.org/repository/release/</url>-->
+<!--            <snapshots><enabled>false</enabled></snapshots>-->
+<!--            <releases><enabled>true</enabled></releases>-->
+<!--        </repository>-->
+<!--        <repository>-->
+<!--            <id>osgeo-snapshot</id>-->
+<!--            <name>OSGeo Snapshot Repository</name>-->
+<!--            <url>https://repo.osgeo.org/repository/snapshot/</url>-->
+<!--            <snapshots><enabled>true</enabled></snapshots>-->
+<!--            <releases><enabled>false</enabled></releases>-->
+<!--        </repository>-->
+<!--    </repositories>-->
 
     <build>
         <finalName>${project.artifactId}</finalName>

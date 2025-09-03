@@ -111,16 +111,17 @@ public class RagController {
     @PostMapping("/build/commit/{taskId}")
     public R<?> commitBuild(@PathVariable String taskId) {
         StpUtil.checkLogin();
-        log.info("开始导入");
-        RAGGenerationService.generateAndSaveGraph(taskId);
-        log.info("结束导入");
-//        CompletableFuture.runAsync(() -> {
-//            // 1. 异步地触发导入 Neo4j 的任务
-//
-//            // 2. 再触发 Python 端的 commit (重命名文件夹)
-//            ragService.notifyPythonToCommit(taskId);
-//        });
-        ragService.notifyPythonToCommit(taskId);
+
+        CompletableFuture.runAsync(() -> {
+            // 1. 异步地触发导入 Neo4j 的任务
+            log.info("开始导入");
+            RAGGenerationService.generateAndSaveGraph(taskId);
+            log.info("结束导入");
+            log.info("重命名文件夹");
+            // 2. 再触发 Python 端的 commit (重命名文件夹)
+            ragService.notifyPythonToCommit(taskId);
+        });
+//        ragService.notifyPythonToCommit(taskId);
         return R.ok("知识库已应用，并已开始同步到图数据库。");
     }
 }

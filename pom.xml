@@ -344,8 +344,8 @@
     </dependencyManagement>
 
     <modules>
-        <module>ruoyi-admin</module>
         <module>ruoyi-common</module>
+        <module>ruoyi-admin</module>
         <module>ruoyi-modules</module>
     </modules>
     <packaging>pom</packaging>
@@ -460,7 +460,15 @@
                 <enabled>true</enabled>
             </releases>
         </repository>
+        <repository>
+            <id>osgeo</id>
+            <name>OSGeo Release Repository</name>
+            <url>https://repo.osgeo.org/repository/release/</url>
+            <snapshots><enabled>false</enabled></snapshots>
+            <releases><enabled>true</enabled></releases>
+        </repository>
     </repositories>
+
 
     <pluginRepositories>
         <pluginRepository>
