@@ -124,4 +124,14 @@ public class RagController {
 //        ragService.notifyPythonToCommit(taskId);
         return R.ok("知识库已应用，并已开始同步到图数据库。");
     }
+
+    @PostMapping("/summarize") // <--- 新增端点
+    public R<?> summarize(@RequestParam("files") MultipartFile[] files) {
+        StpUtil.checkLogin();
+        if (files == null || files.length == 0) {
+            return R.fail("上传的文件不能为空");
+        }
+        // 直接调用服务并同步返回结果
+        return R.ok(ragService.summarize(files));
+    }
 }

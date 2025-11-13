@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
@@ -29,6 +30,8 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.multipart.MultipartFile;
 import com.fasterxml.jackson.databind.ObjectMapper; // Jackson for JSON
+
+import java.io.IOException;
 import java.util.Map;
 
 @Service
@@ -128,7 +131,23 @@ public class RagServiceImpl implements IRagService {
 
         MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
         for (MultipartFile file : files) {
-            body.add("files", file.getResource());
+//            body.add("files", file.getResource());
+            try {
+                // 关键修复：将文件内容包装成 ByteArrayResource
+                // 这样可以确保字节流被正确地添加到请求体中
+                ByteArrayResource resource = new ByteArrayResource(file.getBytes()) {
+                    @Override
+                    public String getFilename() {
+                        // 必须重写 getFilename()，否则下游服务无法获取文件名
+                        return file.getOriginalFilename();
+                    }
+                };
+                body.add("files", resource);
+            } catch (IOException e) {
+                log.error("读取上传文件失败: {}", file.getOriginalFilename(), e);
+                // 根据您的业务逻辑决定是抛出异常还是跳过这个文件
+                throw new RuntimeException("文件读取失败", e);
+            }
         }
 
         HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
@@ -240,5 +259,36 @@ public class RagServiceImpl implements IRagService {
             log.error("通知 Python 服务提交任务 {} 失败", taskId, e);
 //            throw new ServiceException("通知Python服务失败，请检查服务状态");
         }
+    }
+
+    @Override
+    public Object summarize(MultipartFile[] files) {
+        String url = ragServiceUrl + "/summarize"; // <--- 关键：指向新的 Python 路由
+        log.info("正在转发文件到 RAG 服务进行摘要: {}", url);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        for (MultipartFile file : files) {
+            try {
+                ByteArrayResource resource = new ByteArrayResource(file.getBytes()) {
+                    @Override
+                    public String getFilename() {
+                        return file.getOriginalFilename();
+                    }
+                };
+                body.add("files", resource);
+            } catch (IOException e) {
+                log.error("读取上传文件失败: {}", file.getOriginalFilename(), e);
+                throw new RuntimeException("文件读取失败", e);
+            }
+        }
+
+        HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
+
+        // 注意：这里我们期望 Python 返回一个 JSON 对象 (SummaryResponse)
+        // Spring 会自动将其反序列化为 Object (通常是 LinkedHashMap)
+        return restTemplate.postForObject(url, requestEntity, Object.class);
     }
 }

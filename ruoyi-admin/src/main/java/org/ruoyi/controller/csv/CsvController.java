@@ -12,7 +12,8 @@ import java.util.List;
 @RestController
 public class CsvController {
 
-    @Value("E:/vscode/my-ruoyi-admin-webgis/ruoyi-admin/apps/web-antd/public")
+    @Value("E:/vscode/ruoyi-f/ruoyi-admin/apps/web-antd/public")//E:/vscode/ruoyi-f/ruoyi-admin/apps/web-antd/public
+    //E:/vscode/my-ruoyi-admin-webgis/ruoyi-admin/apps/web-antd/public
     private String serverBasePath;
 
     @GetMapping("/read-csv-folder")

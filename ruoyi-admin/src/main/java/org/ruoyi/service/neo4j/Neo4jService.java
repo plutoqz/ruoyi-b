@@ -16,12 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.HashMap;
-import java.util.Objects;
+import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -133,15 +128,32 @@ public class Neo4jService {
     }
 
     private void importNodes(Session session, List<GraphNode> nodes) {
-        log.info("开始分批导入 {} 个节点...", nodes.size());
-        for (int i = 0; i < nodes.size(); i += batchSize) {
-            int end = Math.min(i + batchSize, nodes.size());
-            List<GraphNode> batch = nodes.subList(i, end);
-            session.writeTransaction(tx -> {
-                createOrUpdateNodesInTransaction(tx, batch);
-                return null;
-            });
-            log.debug("已处理 {}/{} 个节点。", end, nodes.size());
+        log.info("开始按 Label (type) 分组 {} 个节点...", nodes.size());
+
+        // 步骤 1: 按 Type (Label) 分组
+        Map<String, List<GraphNode>> groupedNodes = nodes.stream()
+                .collect(Collectors.groupingBy(GraphNode::getType));
+
+        log.info("节点被分成了 {} 个不同的 Label 组进行处理。", groupedNodes.size());
+
+        // 步骤 2: 遍历每个分组并分批导入
+        for (Map.Entry<String, List<GraphNode>> entry : groupedNodes.entrySet()) {
+            String label = entry.getKey();
+            List<GraphNode> nodeGroup = entry.getValue();
+
+            log.info("开始分批导入 Label: [:{}]，共 {} 个节点...", label, nodeGroup.size());
+
+            for (int i = 0; i < nodeGroup.size(); i += batchSize) {
+                int end = Math.min(i + batchSize, nodeGroup.size());
+                List<GraphNode> batch = nodeGroup.subList(i, end);
+
+                // 步骤 3: 调用新的、使用索引的事务方法
+                session.writeTransaction(tx -> {
+                    createOrUpdateNodesInTransaction(tx, batch, label); // 传入 label
+                    return null;
+                });
+                log.debug("Label [:{}] 已处理 {}/{} 个节点。", label, end, nodeGroup.size());
+            }
         }
         log.info("所有节点导入完成。");
     }
@@ -228,7 +240,8 @@ public class Neo4jService {
         });
     }
 
-    private void createOrUpdateNodesInTransaction(Transaction tx, List<GraphNode> nodes) {
+    private void createOrUpdateNodesInTransaction(Transaction tx, List<GraphNode> nodes, String label) {
+        // 准备属性列表
         List<Map<String, Object>> nodeProperties = nodes.stream()
                 .map(node -> {
                     Map<String, Object> props = new HashMap<>(node.getProperties());
@@ -239,18 +252,26 @@ public class Neo4jService {
                     return Map.of(
                             GraphConstants.UNIQUE_ID, node.getId(),
                             GraphConstants.LABEL, node.getLabel(),
-                            GraphConstants.NODE_TYPE, node.getType(),
                             GraphConstants.NODE_PROPERTIES, props
                     );
                 }).collect(Collectors.toList());
 
-        String query = "UNWIND $nodes AS node_data " +
-                "MERGE (n {" + GraphConstants.UNIQUE_ID + ": node_data." + GraphConstants.UNIQUE_ID + "}) " +
-                "SET n += node_data." + GraphConstants.NODE_PROPERTIES + ", " +
-                "    n." + GraphConstants.LABEL + " = node_data." + GraphConstants.LABEL + " " +
-                "WITH n, node_data " +
-                "CALL apoc.create.addLabels(n, [node_data." + GraphConstants.NODE_TYPE + "]) YIELD node " +
-                "RETURN count(node)";
+        // 步骤 1: 动态构建 Cypher 查询字符串，将 label 硬编码进去
+        // 这是优化得以实现的关键点
+        String query = String.format(
+                "UNWIND $nodes AS node_data " +
+                        // 步骤 2: MERGE 时带上 Label (例如 :地块)，使其能够使用索引
+                        "MERGE (n:%s {%s: node_data.%s}) " +
+                        // 步骤 3: SET 属性。不再需要 CALL apoc.create.addLabels
+                        "SET n += node_data.%s, " +
+                        "    n.%s = node_data.%s " +
+                        "RETURN count(n)",
+                label, // <- :%s (Label)
+                GraphConstants.UNIQUE_ID, GraphConstants.UNIQUE_ID, // <- {uniqueId: ...}
+                GraphConstants.NODE_PROPERTIES, // <- SET n += ...
+                GraphConstants.LABEL, GraphConstants.LABEL // <- SET n.label = ...
+        );
+
         tx.run(query, Map.of("nodes", nodeProperties));
     }
 
@@ -293,8 +314,11 @@ public class Neo4jService {
      */
     public GraphData getFullGraph(int limit) {
         String query = String.format(
-                "MATCH (n) WITH n LIMIT %d " +
-                        "OPTIONAL MATCH (n)-[r]-(m) " +
+                // 匹配任意两个节点 n 和 m 之间的任意关系 r
+                "MATCH (n)-[r]-(m) " +
+                        // 限制关系的返回数量。如果关系数量过多，这会导致内存/传输压力。
+                        "WITH n, r, m LIMIT %d " +
+                        // 返回结果
                         "RETURN n, r, m", limit
         );
 
@@ -312,19 +336,26 @@ public class Neo4jService {
         List<GraphEdge> edges = new ArrayList<>();
 
         for (Record record : records) {
-            // 处理节点 n
-            Node n = record.get("n").asNode();
-            if (!nodes.containsKey(n.id())) {
-                nodes.put(n.id(), convertNodeToGraphNode(n));
+            // 确保 n 存在
+            if (record.containsKey("n") && !record.get("n").isNull()) {
+                Node n = record.get("n").asNode();
+                if (!nodes.containsKey(n.id())) {
+                    nodes.put(n.id(), convertNodeToGraphNode(n));
+                }
             }
-            // 处理节点 m
-            Node m = record.get("m").asNode();
-            if (m != null && !nodes.containsKey(m.id())) {
-                nodes.put(m.id(), convertNodeToGraphNode(m));
+
+            // 处理节点 m: 关键修复 - 先检查是否为 NULL
+            if (record.containsKey("m") && !record.get("m").isNull()) { // 检查 m 是否存在且非 NULL
+                Node m = record.get("m").asNode();
+                // m 已经是非 NULL 了，继续原来的逻辑
+                if (!nodes.containsKey(m.id())) {
+                    nodes.put(m.id(), convertNodeToGraphNode(m));
+                }
             }
-            // 处理关系 r
-            Relationship r = record.get("r").asRelationship();
-            if (r != null) {
+
+            // 处理关系 r: 关键修复 - 先检查是否为 NULL
+            if (record.containsKey("r") && !record.get("r").isNull()) { // 检查 r 是否存在且非 NULL
+                Relationship r = record.get("r").asRelationship();
                 edges.add(convertRelationshipToGraphEdge(r));
             }
         }
@@ -335,10 +366,24 @@ public class Neo4jService {
         GraphNode graphNode = new GraphNode();
         // Neo4j 内部 ID 是 long，我们转为 String
         graphNode.setId(String.valueOf(node.id()));
-        graphNode.setLabel(node.get("label").asString(""));
-        // 第一个标签作为类型
-        graphNode.setType(node.labels().iterator().next());
+
+        // 1. 安全获取标签/类型
+        Iterator<String> labelsIterator = node.labels().iterator();
+        String primaryLabel = labelsIterator.hasNext() ? labelsIterator.next() : "UnknownNode";
+
+        // 2. 设置 Type (解决 java.util.NoSuchElementException 导致的 500 错误)
+        // 即使没有标签，也给一个默认值 "UnknownNode"
+        graphNode.setType(primaryLabel);
+
+        // 3. 设置 Label
+        // 推荐使用 Neo4j 的 Label 作为前端的 Label，而不是依赖一个可能不存在的自定义属性
+        graphNode.setLabel(primaryLabel);
+        // 如果您坚持使用自定义属性 "label"，请使用更安全的写法:
+        // graphNode.setLabel(node.get("label").asString(primaryLabel)); // 如果自定义属性不存在，则使用主标签
+
+        // 4. 设置 Properties
         graphNode.setProperties(node.asMap());
+
         return graphNode;
     }
 

@@ -36,4 +36,11 @@ public interface IRagService {
      * @param taskId 任务ID
      */
     void notifyPythonToCommit(String taskId);
+
+    /**
+     * 调用 RAG 服务进行摘要
+     * @param files 上传的文件
+     * @return 摘要结果
+     */
+    Object summarize(MultipartFile[] files);
 }
